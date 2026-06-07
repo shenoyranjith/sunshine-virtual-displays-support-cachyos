@@ -1,0 +1,13 @@
+[Unit]
+Description=Reaffirm physical monitor as primary when no stream
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+# @INSTALL_DIR@ is replaced by install.sh
+ExecStart=@INSTALL_DIR@/monitor-watchdog.sh
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=graphical-session.target

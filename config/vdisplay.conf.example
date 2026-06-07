@@ -1,0 +1,24 @@
+# Virtual-display config (sourced by vdisplay-up.sh / down.sh).
+# install.sh writes a resolved copy at ~/.config/vdisplay.conf.
+
+# Connector used as the forced virtual display (e.g. DP-2, HDMI-A-2).
+VIRT_OUTPUT="DP-2"
+
+# Physical monitor to restore when the stream ends (e.g. HDMI-A-1, DP-1).
+PHYS_OUTPUT="HDMI-A-1"
+
+# Mode to force on the physical monitor on restore (WxH@Hz). Empty = leave as-is.
+PHYS_MODE=""
+
+# Output-management backend:  kscreen (KDE Plasma)  |  wlr (wlroots, TODO)
+BACKEND="kscreen"
+
+# Disable the physical monitor during the stream so games land on the virtual
+# output (1) or keep both enabled with the virtual one primary (0).
+SINGLE_DISPLAY=1
+
+# Hold an idle/DPMS inhibitor for the stream's duration (KDE: kde-inhibit).
+INHIBIT=1
+
+# State dir for logs / pending-mode queue / streaming flag.
+STATE_DIR="$HOME/.local/share/vdisplay"
