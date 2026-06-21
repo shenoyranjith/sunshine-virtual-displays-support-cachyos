@@ -2,8 +2,8 @@
 """Generate a custom EDID for a forced-virtual display connector, for self-hosted
 remote streaming on Linux/Wayland.
 
-Builds a multi-block EDID (base DTDs + CTA-861 VICs + HDR10/BT.2020 metadata)
-from a curated default mode set, optionally extended by a file of WxH@FPS lines.
+Builds a multi-block EDID (base DTDs + CTA-861 VICs, SDR/sRGB) from a curated
+default mode set, optionally extended by a file of WxH@FPS lines.
 
   generate_edid.py OUTPUT.bin [--extra extra-modes.txt] [--name NAME]
                               [--max-pixclk-mhz 1200]
@@ -175,7 +175,7 @@ def build_base(base_dtds, name, max_pixclk_mhz):
     b[17] = 34                    # year 2024
     b[18] = 1
     b[19] = 4                     # EDID 1.4
-    b[20] = 0xA5                  # digital, 10 bpc, DisplayPort
+    b[20] = 0xA5                  # digital, 8 bpc, DisplayPort
     b[21] = 60
     b[22] = 34
     b[23] = 120
@@ -208,12 +208,6 @@ def build_cta_primary(dtds):
     b[pos] = (4 << 5) | 3           # speaker allocation
     b[pos+1] = 0x4F
     pos += 4
-    b[pos] = (7 << 5) | 3           # colorimetry: BT.2020 + DCI-P3
-    b[pos+1], b[pos+2], b[pos+3] = 0x05, 0xE0, 0x01
-    pos += 4
-    b[pos] = (7 << 5) | 6           # HDR static metadata: SDR/HDR/PQ/HLG
-    b[pos+1:pos+7] = bytes([0x06, 0x0D, 0x01, 0x96, 0x80, 0x01])
-    pos += 7
     b[2] = pos
     b[3] = 0x40
     used, p = [], pos

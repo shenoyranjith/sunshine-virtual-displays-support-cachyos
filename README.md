@@ -38,9 +38,8 @@ drm.edid_firmware=DP-2:edid/virtual-display.bin  video=DP-2:e
 - `video=<conn>:e` is **mandatory on the NVIDIA proprietary driver**;
   `drm.edid_firmware` alone is silently ignored. Together they expose a fully-virtual output with
   arbitrary modes and **no HBR bandwidth cap** (no physical link).
-- `scripts/generate_edid.py` builds a multi-block EDID (DTDs + CTA VICs +
-  HDR10/BT.2020 metadata) from a simple mode list, with a DTD pixel-clock
-  sanity guard.
+- `scripts/generate_edid.py` builds a multi-block EDID (DTDs + CTA VICs, SDR
+  only) from a simple mode list, with a DTD pixel-clock sanity guard.
 - **Could ship as**: official docs + an optional `setup-virtual-display`
   helper/wizard (detect free connector, generate EDID, set kernel args, rebuild
   initramfs). It is inherently system-level config, so "docs + helper" fits

@@ -41,11 +41,16 @@ kernel/EDID/compositor layer.
 
 ## HDR / VRR limitation (important)
 
-- On a **forced virtual connector**, NVIDIA does **not** expose HDR or VRR, even
-  if the EDID declares HDR10/BT.2020/HDR static metadata. `kscreen-doctor -o`
-  reports `HDR: disabled`, `Allow EDR: unsupported`, `Vrr: incapable`.
+- On a **forced virtual connector**, NVIDIA does **not** expose HDR or VRR,
+  regardless of what the EDID declares. `kscreen-doctor -o` reports
+  `HDR: disabled`, `Allow EDR: unsupported`, `Vrr: incapable`.
 - NVIDIA only creates the HDR DRM properties (`HDR_OUTPUT_METADATA`,
   `Colorspace`, `max_bpc`) on a **real HDMI 2.1 physical link with SCDC**.
+- The previous generator declared BT.2020 colorimetry + HDR static metadata in
+  the EDID anyway. With NVIDIA ignoring it the declaration was inert, but KDE
+  still saw a wide-gamut sink and could apply color management to SDR content.
+  The generator now omits both blocks: the EDID advertises plain sRGB/SDR,
+  matching what NVIDIA + Sunshine can actually deliver.
 - ⇒ HDR streaming on Linux/NVIDIA currently requires capturing a **real**
   HDR-capable display (locking you to that display's native geometry).
 - Overriding EDID can also disable VRR on the affected connector under Wayland.
