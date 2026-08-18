@@ -243,9 +243,15 @@ not expose it.
 
 ## Capture / encode (KDE Wayland + NVIDIA)
 
-- `capture = kwin` (KWin direct screencast via PipeWire portal) works on KDE
-  where the old `kms`/`wlr` paths did not. It selects output by **connector name**
-  (`output_name = DP-2` works as a name, not just an index).
+- Default capture is `kms`. Apollo 0.4.x and older Sunshine builds do not
+  include the KWin screencast backend; `capture = kwin` then fails immediately
+  with "Unable to initialize capture method".
+- KMS selects by **numeric plane index**, not connector name. Apollo's
+  `from_view("DP-1")` is the integer 23171, which is not a monitor. Use
+  `output_name = 0`. With `SINGLE_DISPLAY=1`, index 0 is whichever output is
+  currently enabled (physical while idle, virtual while streaming).
+- `CAPTURE=kwin` remains available for Sunshine builds that ship `kwingrab`.
+  That path selects by connector name (`output_name = DP-2`).
 - After a fresh NVIDIA driver update, NVENC/EGL can fail (`Couldn't initialize
   EGL display [0x3001]`) until a **reboot** reloads the driver. Then NVENC +
   DMA-BUF zero-copy work.

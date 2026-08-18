@@ -71,6 +71,7 @@ EDID_SOURCE_FILE="${EDID_SOURCE_FILE:-}"
 EDID_IDENTITY="${EDID_IDENTITY:-exact}"
 ALLOW_EDID_TRANSPORT_MISMATCH="${ALLOW_EDID_TRANSPORT_MISMATCH:-0}"
 DYNAMIC_EDID="${DYNAMIC_EDID:-1}"
+CAPTURE="${CAPTURE:-kms}"
 BOOT_BACKEND_OVERRIDE="${BOOT_BACKEND:-auto}"
 INITRAMFS_BACKEND_OVERRIDE="${INITRAMFS_BACKEND:-auto}"
 
@@ -89,6 +90,10 @@ esac
 case "$REPLACE_EDID:$DYNAMIC_EDID" in
     0:0|0:1|1:0|1:1) ;;
     *) echo "REPLACE_EDID and DYNAMIC_EDID must each be 0 or 1" >&2; exit 2 ;;
+esac
+case "$CAPTURE" in
+    kms|kwin) ;;
+    *) echo "Invalid CAPTURE=$CAPTURE (expected kms or kwin)" >&2; exit 2 ;;
 esac
 if [ "$EDID_SOURCE" = "file" ] && [ -z "$EDID_SOURCE_FILE" ]; then
     echo "EDID_SOURCE_FILE is required when EDID_SOURCE=file" >&2
@@ -1293,8 +1298,15 @@ uctl enable monitor-watchdog.service || echo "  could not enable user unit now"
 uctl start monitor-watchdog.service || echo "  it will start with the next graphical session"
 
 say "Configuring Sunshine"
-desired_capture=kwin
-desired_output="$VIRT_OUTPUT"
+desired_capture="$CAPTURE"
+# Apollo/Sunshine KMS selects by numeric plane index, not connector name.
+# "DP-1" is parsed as monitor 23171. With SINGLE_DISPLAY=1, index 0 is the
+# one enabled output: physical while idle, virtual while streaming.
+if [ "$CAPTURE" = kms ]; then
+    desired_output=0
+else
+    desired_output="$VIRT_OUTPUT"
+fi
 desired_prep="$(python3 -c 'import json,sys; print(json.dumps([{"do":sys.argv[1],"undo":sys.argv[2]}],separators=(",",":")))' \
     "$INSTALL_DIR/vdisplay-up.sh" "$INSTALL_DIR/vdisplay-down.sh")"
 if [ -f "$HOST_CONF" ]; then

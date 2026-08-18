@@ -52,7 +52,7 @@ vd_find_sunshine_pid() {
     while [[ "$pid" =~ ^[0-9]+$ ]] && [ "$pid" -gt 1 ] && [ "$steps" -lt 12 ]; do
         comm="$(cat "/proc/$pid/comm" 2>/dev/null || true)"
         case "${comm,,}" in
-            *sunshine*) printf '%s\n' "$pid"; return 0 ;;
+            *sunshine*|*apollo*) printf '%s\n' "$pid"; return 0 ;;
         esac
         next="$(awk '/^PPid:/ { print $2 }' "/proc/$pid/status" 2>/dev/null || true)"
         [ -n "$next" ] || break
@@ -67,7 +67,7 @@ vd_sunshine_pid_alive() {
     [[ "$pid" =~ ^[0-9]+$ ]] && [ "$pid" -gt 1 ] || return 1
     comm="$(cat "/proc/$pid/comm" 2>/dev/null || true)"
     case "${comm,,}" in
-        *sunshine*) return 0 ;;
+        *sunshine*|*apollo*) return 0 ;;
     esac
     return 1
 }

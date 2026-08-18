@@ -136,6 +136,30 @@ scripts/vdisplay-down.sh
 run_as_sunshine() {
     bash -c 'printf sunshine > /proc/self/comm; "$@"; status=$?; :; exit "$status"' bash "$@"
 }
+run_as_apollo() {
+    bash -c 'printf apollo > /proc/self/comm; "$@"; status=$?; :; exit "$status"' bash "$@"
+}
+# Apollo uses the same config and runtime path as Sunshine, but its process name
+# differs. The stream lease must still be recognized as active.
+bash -c 'printf apollo > /proc/self/comm; sleep 60 & wait' &
+OLD_SUNSHINE_PID=$!
+
+# The stale-lease checks also accept Apollo as a valid running stream owner.
+printf 'virtual\n' > "$VD_KSCREEN_STATE"
+cat > "$ROOT/run/vdisplay.flag" <<EOF
+count=1
+sunshine_pid=$OLD_SUNSHINE_PID
+mode_id=mode-1
+EOF
+: > "$TRACE"
+run_as_apollo scripts/vdisplay-up.sh
+grep -Fq 'count=1' "$ROOT/run/vdisplay.flag" || fail "Apollo process was not treated as a live stream owner"
+grep -Fq 'output.DP-2.enable' "$TRACE" || fail "Apollo restart did not reapply the display"
+scripts/vdisplay-down.sh
+kill "$OLD_SUNSHINE_PID" 2>/dev/null || true
+wait "$OLD_SUNSHINE_PID" 2>/dev/null || true
+OLD_SUNSHINE_PID=""
+
 bash -c 'printf sunshine > /proc/self/comm; sleep 60 & wait' &
 OLD_SUNSHINE_PID=$!
 

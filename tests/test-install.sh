@@ -128,7 +128,8 @@ assert_file_has "$ROOT/etc/mkinitcpio.conf.d/90-vdisplay.conf" 'virtual-display.
 cmp -s "$ROOT/var/lib/vdisplay/source-edid.bin" \
     "$ROOT/usr/lib/firmware/edid/virtual-display.bin" || \
     fail "generated exact install diverged from its immutable source"
-assert_file_has "$ROOT/home/tester/.config/sunshine/sunshine.conf" 'capture = kwin'
+assert_file_has "$ROOT/home/tester/.config/sunshine/sunshine.conf" 'capture = kms'
+assert_file_has "$ROOT/home/tester/.config/sunshine/sunshine.conf" 'output_name = 0'
 assert_file_has "$ROOT/home/tester/.config/sunshine/sunshine.conf" 'keep_me = yes'
 [ "$(stat -c %a "$ROOT/home/tester/.config")" = 700 ] || fail "installer changed ~/.config mode"
 
@@ -191,6 +192,9 @@ assert_absent "$ROOT/etc/mkinitcpio.conf.d/90-vdisplay.conf"
 assert_absent "$ROOT/usr/lib/firmware/edid/virtual-display.bin"
 assert_file_has "$ROOT/home/tester/.config/sunshine/sunshine.conf" 'capture = kms'
 assert_file_has "$ROOT/home/tester/.config/sunshine/sunshine.conf" 'keep_me = yes'
+if grep -Fq 'output_name = 0' "$ROOT/home/tester/.config/sunshine/sunshine.conf"; then
+    fail "uninstall left installer-owned output_name"
+fi
 assert_absent "$ROOT/etc/vdisplay-install.conf"
 [ "$(grep -c '^limine-mkinitcpio$' "$ROOT/var/lib/vdisplay-test-trace")" = 2 ] || \
     fail "uninstall did not rebuild Limine/initramfs exactly once"
