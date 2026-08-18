@@ -1,10 +1,15 @@
 # Virtual-display config (sourced by vdisplay-up.sh / down.sh).
 # install.sh writes a resolved copy at ~/.config/vdisplay.conf.
 
-# Connector used as the forced virtual display (e.g. DP-2, HDMI-A-2).
+# How the stream output is provided:
+#   virtual  — firmware EDID on a spare, disconnected connector (default)
+#   physical — real sink that stays plugged in, compositor-disabled until stream
+STREAM_MODE="virtual"
+
+# Connector used as the stream output (e.g. DP-2, HDMI-A-1).
 VIRT_OUTPUT="DP-2"
 
-# Physical monitor to restore when the stream ends (e.g. HDMI-A-1, DP-1).
+# Desktop monitor to restore when the stream ends (e.g. HDMI-A-1, DP-3).
 PHYS_OUTPUT="HDMI-A-1"
 
 # Mode to force on the physical monitor on restore (WxH@Hz). Empty = leave as-is.

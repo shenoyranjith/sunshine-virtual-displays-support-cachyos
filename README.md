@@ -1,132 +1,133 @@
-# Virtual display support for Linux game streaming
+# Sunshine / Apollo stream displays for Linux
 
-Proof-of-concept tooling that gives a **KDE Plasma / Wayland** host a firmware-backed virtual monitor, client-adaptive resolution, and stream-scoped display switching — without a physical dummy plug.
+Give a **KDE Plasma 6 / Wayland** host a second, stream-only output so Moonlight
+or Artemis can request their own resolution, games land on that output, and the
+desktop monitor comes back when the session ends.
 
-Works with **Sunshine**, **Apollo**, and other Sunshine-compatible hosts that support Linux prep commands and KMS capture.
+No HDMI dummy plug is required. The stream output is either:
 
-> **Status: draft / working POC.** Exercised on CachyOS with KDE Plasma 6, NVIDIA, Limine, and Apollo 0.4.x. The original prototype targeted Nobara/Fedora + grubby/dracut. Other compositors, boot loaders, and GPU vendors are best-effort or untested.
+- **virtual** — firmware EDID on a spare, disconnected GPU connector
+- **physical** — a real cable that stays plugged in (for example HDMI on a
+  dual-input monitor) and is compositor-disabled until a stream starts
 
-## Credits and lineage
+Works with **Apollo**, **Sunshine**, and other Sunshine-compatible hosts that
+support `global_prep_cmd` and KMS capture.
 
-This repository is a **CachyOS/Arch fork** of the upstream proof-of-concept:
+> **Status: working proof of concept.** Tested on CachyOS, KDE Plasma 6, NVIDIA,
+> Limine, and Apollo 0.4.x. The parent project targeted Nobara/Fedora with
+> grubby/dracut. Other compositors, boot loaders, and GPU vendors are untested.
 
-- **[EnriqueWood/sunshine-virtual-displays-support-poc](https://github.com/EnriqueWood/sunshine-virtual-displays-support-poc)** — parent project and reference implementation, filed alongside [LizardByte/Sunshine#5266](https://github.com/LizardByte/Sunshine/issues/5266) (*Virtual displays not supported on linux*).
+This is a **CachyOS/Arch fork** of
+[EnriqueWood/sunshine-virtual-displays-support-poc](https://github.com/EnriqueWood/sunshine-virtual-displays-support-poc),
+filed alongside [LizardByte/Sunshine#5266](https://github.com/LizardByte/Sunshine/issues/5266).
+Please credit that repository and [Sunshine](https://github.com/LizardByte/Sunshine)
+if you use or extend this work.
 
-Changes in this fork focus on:
+## Choose a stream mode
 
-- Limine + mkinitcpio on CachyOS/Arch (alongside existing GRUB/grubby/dracut paths)
-- Clone-first EDID installation with transport validation and reversible install metadata
-- Hybrid-GPU connector selection via the host's Sunshine `adapter_name`
-- **Apollo-compatible capture defaults** (`capture = kms`, `output_name = 0`)
-- Expanded tests and technical notes from real CachyOS hardware bring-up
+| | `STREAM_MODE=virtual` (default) | `STREAM_MODE=physical` |
+|--|--------------------------------|------------------------|
+| Stream connector | Spare port, **unplugged** | Real sink, **always plugged in** |
+| How it appears | Kernel EDID + `video=<conn>:e` | Compositor enables it only while streaming |
+| Reboot after install | Yes, if boot/initramfs changed | No |
+| Extra client modes | Can be learned into firmware EDID (reboot to apply) | Only modes that input already advertises |
+| HDR on NVIDIA | Does **not** work (headless forced port) | Uses a real sink; try this for HDR |
+| Typical layout | Desktop on `DP-3`, virtual on unused `DP-1` | Desktop on `DP-3`, stream on `HDMI-A-1` |
 
-If you use or extend this work, please credit the [parent repository](https://github.com/EnriqueWood/sunshine-virtual-displays-support-poc) and the [Sunshine](https://github.com/LizardByte/Sunshine) project it targets.
+Switching an existing install from one mode to the other requires
+`sudo ./uninstall.sh` first (and a reboot if you are leaving virtual mode, so
+the old kernel arguments are gone).
 
-## What problem this solves
+## What is tested
 
-On Linux + Wayland, a good Moonlight/Apollo session usually needs several manual hacks:
-
-1. A **dummy plug** (or kernel EDID tricks) so the host has a second capturable output whose resolution can differ from the physical monitor.
-2. **Client-adaptive resolution** — Windows hosts get `dd_*` options; Linux users otherwise hand-roll `global_prep_cmd` scripts.
-3. **Games on the wrong display** — with two outputs enabled, Steam and many titles launch on the physical primary.
-4. **Mid-stream blanking** — KDE DPMS can turn off the idle streamed output and kill capture.
-
-This repo automates those pieces for a KDE + NVIDIA stack.
-
-## What works today (tested)
-
-On a CachyOS host with an MSI MAG321UX OLED (`DP-3` physical, `DP-1` virtual):
+CachyOS host, MSI MAG321UX OLED, NVIDIA, Apollo 0.4.x. Desktop on `DP-3`.
 
 | Feature | Status |
 |--------|--------|
-| Virtual display via firmware EDID + force-enable | Works |
-| Client-adaptive mode (e.g. 4K@120) via `global_prep_cmd` | Works |
-| Single-active-output during stream (games on virtual) | Works |
-| Stream-scoped DPMS inhibition | Works |
-| Idle monitor watchdog (restore physical primary) | Works |
-| Apollo KMS capture (`capture = kms`, `output_name = 0`) | Works |
-| Dynamic EDID mode learning (reboot to apply new modes) | Works |
-| HDR on the virtual output | **Does not work** (see below) |
-
-## Known limitations
-
-### HDR on the virtual output (NVIDIA)
-
-A cloned HDR EDID is **necessary but not sufficient**. The installer can copy a real monitor's 10-bit, BT.2020, PQ, and static-metadata blocks onto a force-enabled connector, and KDE will offer an HDR toggle — but **NVIDIA NvKMS rejects the HDR atomic configuration** on a headless forced port.
-
-Observed on the tested stack (not just high-bandwidth modes):
-
-- 3840×2160@120 SDR — works
-- 3840×2160@60 HDR — **rejected** ("display driver rejected the output configuration")
-- 2560×1440@240 HDR — **rejected**
-- HDR on the **physical** monitor (`DP-3`) — works as usual
-
-The EDID cannot emulate DisplayPort DPCD/AUX link training or an HDMI FRL sink. NvKMS validates HDR colorspace and metadata against real link state. Treat **SDR streaming from the virtual display** as the supported path on NVIDIA + firmware EDID for now.
-
-See [docs/TECHNICAL-NOTES.md](docs/TECHNICAL-NOTES.md) for the full EDID/HDR analysis.
-
-### Other caveats
-
-- **New EDID modes need a reboot** on the tested NVIDIA driver (firmware EDID is boot-time state).
-- **EDID transport must match** the forced connector (do not install a DisplayPort blob on HDMI without an explicit override).
-- **Apollo 0.4.x does not ship KWin screencast capture**; use `capture = kms`, not `capture = kwin`.
-- For KMS, set **`output_name = 0`**, not a connector name. Apollo parses `DP-1` as monitor index `23171`.
-- With `SINGLE_DISPLAY=1`, index `0` is whichever output is enabled: physical while idle, virtual while streaming.
-- A hard-killed host process may skip the undo prep command; run `vdisplay-down.sh` manually or reboot.
-- wlroots/non-KDE backends, AMD/Intel, and systemd-boot/rEFInd install paths remain TODO.
+| Virtual output via firmware EDID | Works (SDR, including 4K@120) |
+| Physical HDMI stream port, disabled until stream | Works |
+| Client-adaptive mode via `global_prep_cmd` | Works |
+| Only the stream output enabled during a session | Works |
+| DPMS inhibit for the session | Works |
+| Idle watchdog restores the desktop primary | Works |
+| Apollo KMS (`capture = kms`, `output_name = 0`) | Works |
+| Firmware EDID mode learning | Virtual mode only |
+| HDR on a virtual / force-enabled connector | **Does not work** |
+| HDR on a physical stream port | Possible (real sink); not a guarantee |
 
 ## Requirements
 
-**Host:** KDE Plasma 6 on Wayland, NVIDIA GPU, a spare disconnected connector on the streaming GPU.
-
-**Streaming host:** Sunshine or Apollo with `global_prep_cmd` support. Apollo needs KMS capture and `cap_sys_admin` on the binary (the AUR package sets this).
-
-**CachyOS packages:**
+- KDE Plasma 6 on Wayland
+- NVIDIA GPU (the streaming GPU must own both connectors)
+- Sunshine or Apollo with `global_prep_cmd`. Apollo needs KMS capture and
+  `cap_sys_admin` on the binary (the AUR package sets this)
+- Either a free disconnected connector, or a second plugged-in port
 
 ```bash
 sudo pacman -S python libkscreen kde-cli-tools jq systemd util-linux limine-mkinitcpio-hook
-# Optional but recommended:
+# Optional:
 sudo pacman -S v4l-utils libnotify edid-decode
 ```
 
-## Quick start (CachyOS)
+## Install
 
-### 1. Preflight
-
-Inspect connectors, EDID source, and boot backend without changing anything:
+Clone the repo, then inspect without writing anything:
 
 ```bash
 ./install.sh --check
 ```
 
-Override connectors if auto-detection is wrong:
+Name the connectors explicitly. Auto-detect can pick the wrong pair.
 
-```bash
-sudo env VIRT_OUTPUT=DP-1 PHYS_OUTPUT=DP-3 ./install.sh --check
-```
+### Virtual display (spare port)
 
-### 2. Install
-
-Typical DisplayPort setup (clone the physical monitor EDID onto a free DP port):
+Clone the desktop monitor EDID onto a free DisplayPort (or HDMI) connector:
 
 ```bash
 sudo env \
+  STREAM_MODE=virtual \
   VIRT_OUTPUT=DP-1 PHYS_OUTPUT=DP-3 \
   EDID_SOURCE=physical EDID_IDENTITY=exact \
   ./install.sh
 ```
 
-Reboot when the installer reports boot or initramfs changes, then verify:
+Reboot if the installer says boot or initramfs changed. Then:
 
 ```bash
 kscreen-doctor -o
 ```
 
-You should see the virtual connector **connected** (often disabled while idle) with modes from the source monitor.
+The spare connector should show as **connected** (usually disabled while idle)
+with modes from the source monitor.
 
-### 3. Streaming host config
+The source EDID **transport must match** the spare connector (DisplayPort blob
+on DisplayPort, HDMI blob on HDMI) unless you set
+`ALLOW_EDID_TRANSPORT_MISMATCH=1`. Use `EDID_SOURCE=file` with a dump from the
+same kind of input when they differ. `EDID_SOURCE=generated` builds a synthetic
+SDR EDID with no HDR claims.
 
-The installer patches `~/.config/sunshine/sunshine.conf` (Apollo uses the same path):
+### Physical stream port (real cable)
+
+Leave HDMI (or a second DP) plugged in. Nothing is written to firmware or the
+kernel command line:
+
+```bash
+sudo env STREAM_MODE=physical VIRT_OUTPUT=HDMI-A-1 PHYS_OUTPUT=DP-3 ./install.sh --check
+sudo env STREAM_MODE=physical VIRT_OUTPUT=HDMI-A-1 PHYS_OUTPUT=DP-3 ./install.sh
+```
+
+Idle: desktop on `DP-3`, `HDMI-A-1` disabled. Stream: HDMI on, DisplayPort off.
+
+On a dual-input monitor the panel will often **wake and switch to HDMI** when
+that port gets a signal. That is the monitor, not this tooling. On MSI MAG
+OLEDs, set **Input Source → Auto Scan → OFF**, keep the OSD on **DP**, and
+disable **HDMI CEC** if it is on. The GPU still drives HDMI for capture; the
+panel stays on DisplayPort, sees no signal, and can sleep.
+
+### After either install
+
+The installer patches `~/.config/sunshine/sunshine.conf` (Apollo uses the same
+file):
 
 ```ini
 capture = kms
@@ -134,96 +135,93 @@ output_name = 0
 global_prep_cmd = [{"do":"…/vdisplay-up.sh","undo":"…/vdisplay-down.sh"}]
 ```
 
-Restart Apollo/Sunshine after install. For Sunshine builds with KWin screencast support, reinstall with `CAPTURE=kwin` instead.
+Restart Apollo or Sunshine. Use `CAPTURE=kwin` only on Sunshine builds that
+ship `kwingrab`; Apollo 0.4.x does not.
 
-### 4. Stream
+`output_name` must be **`0`**, not a connector name. Apollo parses `DP-1` as
+monitor index `23171`. With `SINGLE_DISPLAY=1`, index 0 is whichever output is
+enabled: the desktop while idle, the stream output while a session is running.
 
-Connect from Moonlight/Artemis. On session start:
+## What happens during a stream
 
-- `vdisplay-up.sh` sets the virtual output to the client's requested mode (or closest match)
-- disables the physical monitor (`SINGLE_DISPLAY=1`)
-- holds a DPMS inhibitor for the session
+On connect, `vdisplay-up.sh`:
 
-On disconnect, `vdisplay-down.sh` restores the physical layout.
+1. Picks the closest KScreen mode to the client width/height/fps
+2. Enables the stream output and makes it primary
+3. Disables the desktop output (`SINGLE_DISPLAY=1`)
+4. Holds a KDE idle/DPMS inhibitor for the session
 
-## How it works
+On disconnect, `vdisplay-down.sh` reverses that. A user unit
+(`monitor-watchdog.service`) also restores the desktop primary whenever no
+stream lease is present (`$XDG_RUNTIME_DIR/vdisplay.flag`), including after a
+reboot that skipped the undo command.
 
-### Boot-time virtual connector
+If the host process is killed hard, run `vdisplay-down.sh` yourself or reboot.
 
-Kernel arguments on a spare connector:
+## How the two modes work
+
+**Virtual.** The installer installs an EDID at
+`/usr/lib/firmware/edid/virtual-display.bin`, embeds it in the initramfs, and
+adds kernel arguments:
 
 ```
 drm.edid_firmware=DP-1:edid/virtual-display.bin  video=DP-1:e
 ```
 
-On NVIDIA, **`video=<conn>:e` is required**; `drm.edid_firmware` alone is not enough. Together they expose a connected output with the installed EDID, avoiding a dummy plug's HBR bandwidth cap.
+On NVIDIA, `drm.edid_firmware` alone does nothing; `video=<conn>:e` is
+required. Together they expose a connected output without a dummy plug (and
+without a dummy’s HBR bandwidth cap). Firmware EDID is boot-time state: new
+modes need a reboot.
 
-The EDID blob lives in `/usr/lib/firmware/edid/` and is embedded in the initramfs.
+If a client asks for a mode that is not in the EDID, the session uses the
+closest match and queues the request. A systemd path unit regenerates the
+firmware from an immutable source snapshot and asks for a reboot.
 
-### Runtime display switching
+**Physical.** No EDID file, no kernel arguments. The stream connector must stay
+**connected**. Runtime switching is the same as virtual mode.
 
-| Phase | Active output | KMS `output_name = 0` |
-|-------|---------------|------------------------|
-| Idle | Physical (`DP-3`) | Captures physical (startup probe succeeds) |
-| Streaming | Virtual (`DP-1`) | Captures virtual |
+## HDR on NVIDIA
 
-The monitor watchdog keeps the physical monitor primary whenever no stream lease is active (`$XDG_RUNTIME_DIR/vdisplay.flag`).
+A cloned HDR EDID is necessary but not sufficient on a **headless forced**
+connector. NvKMS still rejects the HDR atomic commit
+(`display driver rejected the output configuration`), including 4K@60 HDR and
+1440p@240 HDR, while 4K@120 SDR on the same virtual port works. The blob cannot
+fake DisplayPort DPCD/AUX or HDMI FRL link state.
 
-### Dynamic EDID growth
+Use **`STREAM_MODE=physical`** when you want the driver to see a real sink
+(desktop on DisplayPort, stream on HDMI). SDR from the virtual display remains
+the supported firmware-EDID path.
 
-When a client requests a mode not in the EDID, `vdisplay-up.sh` queues it. A systemd path unit runs `edid-regen.sh`, appends encodable modes to a new firmware EDID from the immutable source snapshot, and asks for a reboot. Until then, the session uses the closest existing mode.
+Details: [docs/TECHNICAL-NOTES.md](docs/TECHNICAL-NOTES.md).
 
 ## Configuration
 
-User runtime config: `~/.config/vdisplay.conf` (written by the installer).
+`install.sh` writes `~/.config/vdisplay.conf`. Example:
+[config/vdisplay.conf.example](config/vdisplay.conf.example).
 
 ```bash
-VIRT_OUTPUT=DP-1      # forced virtual connector
-PHYS_OUTPUT=DP-3      # physical monitor to restore
-SINGLE_DISPLAY=1      # disable physical during stream (recommended for KMS index 0)
-INHIBIT=1             # hold KDE idle inhibitor during stream
-BACKEND=kscreen       # output management backend (wlroots = TODO)
-DYNAMIC_EDID=1
+STREAM_MODE=virtual   # or physical
+VIRT_OUTPUT=DP-1      # stream connector
+PHYS_OUTPUT=DP-3      # desktop connector to restore
+SINGLE_DISPLAY=1      # disable desktop during stream (needed for KMS index 0)
+INHIBIT=1             # KDE idle inhibitor during stream
+BACKEND=kscreen       # wlroots is TODO
+DYNAMIC_EDID=1        # virtual only; physical installs force 0
 ```
 
-### Install-time environment variables
-
-| Variable | Default | Purpose |
-|----------|---------|---------|
-| `VIRT_OUTPUT` | auto | Spare connector to force |
-| `PHYS_OUTPUT` | auto | Connected physical monitor on the same DRM card |
-| `EDID_SOURCE` | `physical` | `physical`, `file`, or `generated` |
-| `EDID_SOURCE_FILE` | — | Path when `EDID_SOURCE=file` |
-| `EDID_IDENTITY` | `exact` | `exact` or `virtualized` (KScreen de-duplication) |
-| `CAPTURE` | `kms` | `kms` or `kwin` (Sunshine with kwingrab only) |
-| `REPLACE_EDID` | `1` | Replace existing firmware EDID (with backup) |
-| `DYNAMIC_EDID` | `1` | Enable mode-learning regeneration service |
-
-### EDID source policy
-
-- **`physical`** — snapshot `PHYS_OUTPUT` on the selected DRM card (default; preserves HDR/color/vendor blocks).
-- **`file`** — use a captured EDID; required when source and target transports differ (e.g. HDMI capture for an HDMI virtual port).
-- **`generated`** — synthetic SDR EDID from `scripts/generate_edid.py`; no HDR claims.
-
-Source and target **transport must match** (DisplayPort EDID on DisplayPort, etc.) unless `ALLOW_EDID_TRANSPORT_MISMATCH=1`.
-
-## Repository layout
-
-```
-install.sh / uninstall.sh          Installer and reversible removal
-config/vdisplay.conf.example       Runtime config template
-scripts/
-  generate_edid.py                 Clone, inspect, append modes, or synthesize SDR
-  pick-mode.py                     Closest KScreen mode for a client request
-  vdisplay-up.sh / vdisplay-down.sh   Sunshine global_prep_cmd pair
-  vdisplay-common.sh               Shared KScreen / lease / inhibit helpers
-  monitor-watchdog.sh              Restore physical primary when idle
-  edid-regen.sh                    Root-side EDID regeneration
-  vdisplay-platform.sh             Bootloader + initramfs backends
-systemd/                           EDID regen (system) + watchdog (user)
-docs/TECHNICAL-NOTES.md            EDID, NVIDIA, Limine, HDR deep dive
-tests/                             Rootless unit tests + bwrap install smoke test
-```
+| Install-time variable | Default | Meaning |
+|----------------------|---------|---------|
+| `STREAM_MODE` | `virtual` | `virtual` or `physical` |
+| `VIRT_OUTPUT` | auto | Stream connector |
+| `PHYS_OUTPUT` | auto | Desktop connector on the same DRM card |
+| `EDID_SOURCE` | `physical` | `physical`, `file`, or `generated` (ignored when physical mode) |
+| `EDID_SOURCE_FILE` | — | Required for `EDID_SOURCE=file` |
+| `EDID_IDENTITY` | `exact` | `exact`, or `virtualized` so KScreen can tell the clone apart |
+| `CAPTURE` | `kms` | `kms`, or `kwin` on Sunshine with kwingrab |
+| `REPLACE_EDID` | `1` | Replace an existing firmware EDID (backed up) |
+| `DYNAMIC_EDID` | `1` | Mode-learning service; forced off in physical mode |
+| `DRM_CARD` | auto | `cardN` when several GPUs are present |
+| `BOOT_BACKEND` / `INITRAMFS_BACKEND` | auto | `limine`, `grubby`, `grub` / `mkinitcpio`, `dracut`, … |
 
 ## Uninstall
 
@@ -231,21 +229,50 @@ tests/                             Rootless unit tests + bwrap install smoke tes
 sudo ./uninstall.sh
 ```
 
-Removes installer-owned scripts, units, boot fragments, and Sunshine keys (when still installer-owned). Preserves administrator-managed boot args and externally managed EDID files unless the install state proves ownership.
+Removes installer-owned scripts, units, boot fragments, and Sunshine keys that
+are still installer-owned. It does not delete administrator-managed kernel
+arguments or an EDID it does not own.
 
-## Status / roadmap
+## Layout
 
-**Done in this fork:** Limine/grubby/GRUB, mkinitcpio/dracut, connector auto-detection, NVIDIA card filtering, source-EDID snapshots, transport checks, reversible install metadata, Apollo KMS defaults, tests.
+```
+install.sh / uninstall.sh
+config/vdisplay.conf.example
+scripts/
+  vdisplay-up.sh / vdisplay-down.sh   global_prep_cmd pair
+  vdisplay-common.sh                  KScreen, stream lease, inhibit
+  monitor-watchdog.sh                 restore desktop primary when idle
+  pick-mode.py                        closest KScreen mode
+  generate_edid.py                    clone, inspect, append, or synthesize
+  edid-regen.sh                       root-side firmware regeneration
+  vdisplay-platform.sh                bootloader + initramfs backends
+systemd/                              regen (system) + watchdog (user)
+docs/TECHNICAL-NOTES.md
+tests/                                rootless units + bwrap install smoke test
+```
 
-**Still TODO:** wlroots backend, AMD/Intel validation, systemd-boot/rEFInd, upstream Sunshine `dd_*` parity on Linux.
+## Tests
+
+```bash
+bash tests/test-runtime.sh
+bash tests/test-edid.sh
+bash tests/test-regen.sh
+bash tests/test-platform.sh
+bash tests/test-install.sh    # needs bubblewrap
+```
+
+## Still TODO
+
+wlroots backend, AMD/Intel, systemd-boot/rEFInd, upstream Sunshine `dd_*`
+parity on Linux.
 
 ## References
 
-- [EnriqueWood/sunshine-virtual-displays-support-poc](https://github.com/EnriqueWood/sunshine-virtual-displays-support-poc) — parent repository
-- [LizardByte/Sunshine#5266](https://github.com/LizardByte/Sunshine/issues/5266) — upstream feature discussion
-- [LizardByte/Sunshine](https://github.com/LizardByte/Sunshine) — self-hosted game stream host
-- [ClassicOldSong/Apollo](https://github.com/ClassicOldSong/Apollo) — Sunshine fork used in CachyOS testing
+- [EnriqueWood/sunshine-virtual-displays-support-poc](https://github.com/EnriqueWood/sunshine-virtual-displays-support-poc)
+- [LizardByte/Sunshine#5266](https://github.com/LizardByte/Sunshine/issues/5266)
+- [LizardByte/Sunshine](https://github.com/LizardByte/Sunshine)
+- [ClassicOldSong/Apollo](https://github.com/ClassicOldSong/Apollo)
 - [CachyOS Limine boot configuration](https://wiki.cachyos.org/configuration/boot_manager_configuration/)
 - [Linux firmware EDID loader](https://github.com/torvalds/linux/blob/master/drivers/gpu/drm/drm_edid_load.c)
-- [NVIDIA open-gpu-kernel-modules — DRM connector](https://github.com/NVIDIA/open-gpu-kernel-modules/blob/main/kernel-open/nvidia-drm/nvidia-drm-connector.c)
-- Community NVIDIA virtual-display gist: [8dbf551d66f00e8156ef4dd2b2b090a0](https://gist.github.com/8dbf551d66f00e8156ef4dd2b2b090a0)
+- [NVIDIA nvidia-drm-connector.c](https://github.com/NVIDIA/open-gpu-kernel-modules/blob/main/kernel-open/nvidia-drm/nvidia-drm-connector.c)
+- [Community NVIDIA virtual-display gist](https://gist.github.com/8dbf551d66f00e8156ef4dd2b2b090a0)

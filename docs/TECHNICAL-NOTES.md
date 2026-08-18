@@ -135,6 +135,29 @@ connector such as `DP-1`. Transport compatibility removes one source of
 failure, but it still does not guarantee that NVIDIA will accept every HDR or
 high-bandwidth mode without a physical DisplayPort sink.
 
+## Physical stream port (`STREAM_MODE=physical`)
+
+Firmware EDID on a headless connector is the default because it does not occupy
+a real input. The cost on NVIDIA is that NvKMS still treats the port as
+headless: HDR atomic commits are rejected even when the cloned EDID claims PQ
+and BT.2020.
+
+`STREAM_MODE=physical` skips firmware EDID, `video=<conn>:e`, and initramfs
+drop-ins. The stream connector must stay plugged in. The same runtime path
+then applies: the idle watchdog keeps that output disabled, and `vdisplay-up.sh`
+enables it only for the session.
+
+This is the dual-input layout the MAG321UX (and similar monitors) already
+support: DisplayPort as the always-on desktop, HDMI left plugged in but
+compositor-disabled until Apollo/Sunshine starts a stream. Because the HDMI
+port has a real sink, link training and HDR metadata validation can succeed
+where a forced spare connector cannot. Modes are whatever that input already
+advertises; there is no firmware mode-learning.
+
+Switching an existing install between `virtual` and `physical` requires
+uninstall first. Older install metadata without `STREAM_MODE` is treated as
+`virtual`.
+
 ## EDID construction gotchas
 
 - **DTD pixel clock is a 16-bit field in units of 10 kHz → max 655.35 MHz.**

@@ -6,6 +6,10 @@
 #   * Fedora/RHEL-family systems using grubby + dracut
 #   * GRUB with mkinitcpio, dracut, or update-initramfs
 #
+# Stream output:
+#   STREAM_MODE=virtual   (default) firmware EDID on a spare, disconnected connector
+#   STREAM_MODE=physical  keep a real sink (e.g. HDMI) plugged in, disabled until stream
+#
 # Inspect without changes: ./install.sh --check
 # Install as root:        sudo ./install.sh
 set -Eeuo pipefail
@@ -61,17 +65,20 @@ EDID_SOURCE_EXPLICIT=0
 EDID_SOURCE_FILE_EXPLICIT=0
 EDID_IDENTITY_EXPLICIT=0
 ALLOW_EDID_TRANSPORT_MISMATCH_EXPLICIT=0
+STREAM_MODE_EXPLICIT=0
 [ "${EDID_SOURCE+x}" != x ] || EDID_SOURCE_EXPLICIT=1
 [ "${EDID_SOURCE_FILE+x}" != x ] || EDID_SOURCE_FILE_EXPLICIT=1
 [ "${EDID_IDENTITY+x}" != x ] || EDID_IDENTITY_EXPLICIT=1
 [ "${ALLOW_EDID_TRANSPORT_MISMATCH+x}" != x ] || \
     ALLOW_EDID_TRANSPORT_MISMATCH_EXPLICIT=1
+[ "${STREAM_MODE+x}" != x ] || STREAM_MODE_EXPLICIT=1
 EDID_SOURCE="${EDID_SOURCE:-physical}"
 EDID_SOURCE_FILE="${EDID_SOURCE_FILE:-}"
 EDID_IDENTITY="${EDID_IDENTITY:-exact}"
 ALLOW_EDID_TRANSPORT_MISMATCH="${ALLOW_EDID_TRANSPORT_MISMATCH:-0}"
 DYNAMIC_EDID="${DYNAMIC_EDID:-1}"
 CAPTURE="${CAPTURE:-kms}"
+STREAM_MODE="${STREAM_MODE:-}"
 BOOT_BACKEND_OVERRIDE="${BOOT_BACKEND:-auto}"
 INITRAMFS_BACKEND_OVERRIDE="${INITRAMFS_BACKEND:-auto}"
 
@@ -95,7 +102,14 @@ case "$CAPTURE" in
     kms|kwin) ;;
     *) echo "Invalid CAPTURE=$CAPTURE (expected kms or kwin)" >&2; exit 2 ;;
 esac
-if [ "$EDID_SOURCE" = "file" ] && [ -z "$EDID_SOURCE_FILE" ]; then
+if [ -n "$STREAM_MODE" ]; then
+    case "$STREAM_MODE" in
+        virtual|physical) ;;
+        *) echo "Invalid STREAM_MODE=$STREAM_MODE (expected virtual or physical)" >&2; exit 2 ;;
+    esac
+fi
+if [ "$EDID_SOURCE" = "file" ] && [ -z "$EDID_SOURCE_FILE" ] && \
+   [ "${STREAM_MODE:-virtual}" != physical ]; then
     echo "EDID_SOURCE_FILE is required when EDID_SOURCE=file" >&2
     exit 2
 fi
@@ -291,6 +305,7 @@ PRIOR_EDID_SOURCE_INTERFACE=""
 PRIOR_EDID_TARGET_INTERFACE=""
 PRIOR_EDID_SOURCE_SNAPSHOT=""
 PRIOR_ALLOW_EDID_TRANSPORT_MISMATCH=""
+PRIOR_STREAM_MODE=""
 PRIOR_BOOT_BACKEND=""
 PRIOR_VIRT_OUTPUT=""
 PRIOR_EDID_NAME=""
@@ -330,6 +345,7 @@ if { [ "$CHECK_ONLY" != "1" ] || [ "$(id -u)" -eq 0 ]; } && \
     PRIOR_EDID_TARGET_INTERFACE="$(read_install_state EDID_TARGET_INTERFACE)"
     PRIOR_EDID_SOURCE_SNAPSHOT="$(read_install_state EDID_SOURCE_SNAPSHOT)"
     PRIOR_ALLOW_EDID_TRANSPORT_MISMATCH="$(read_install_state ALLOW_EDID_TRANSPORT_MISMATCH)"
+    PRIOR_STREAM_MODE="$(read_install_state STREAM_MODE)"
     PRIOR_BOOT_BACKEND="$(read_install_state BOOT_BACKEND)"
     PRIOR_VIRT_OUTPUT="$(read_install_state VIRT_OUTPUT)"
     PRIOR_EDID_NAME="$(read_install_state EDID_NAME)"
@@ -359,6 +375,7 @@ fi
 : "${PRIOR_EDID_IDENTITY:=}" "${PRIOR_EDID_SOURCE_INTERFACE:=}"
 : "${PRIOR_EDID_TARGET_INTERFACE:=}" "${PRIOR_EDID_SOURCE_SNAPSHOT:=}"
 : "${PRIOR_ALLOW_EDID_TRANSPORT_MISMATCH:=}"
+: "${PRIOR_STREAM_MODE:=}"
 if [ "$HAVE_PRIOR_INSTALL_STATE" = "1" ] && [ -n "$PRIOR_EDID_SOURCE" ]; then
     if [ "$EDID_SOURCE_EXPLICIT" != "1" ]; then
         EDID_SOURCE="$PRIOR_EDID_SOURCE"
@@ -647,12 +664,43 @@ write_root_config() {
     trap - RETURN
 }
 
+# STREAM_MODE is resolved here so physical installs can skip boot/EDID tooling.
+if [ "$STREAM_MODE_EXPLICIT" != "1" ]; then
+    [ -n "$STREAM_MODE" ] || STREAM_MODE="$(read_connector_config STREAM_MODE || true)"
+    [ -n "$STREAM_MODE" ] || STREAM_MODE="${PRIOR_STREAM_MODE:-virtual}"
+fi
+: "${STREAM_MODE:=virtual}"
+case "$STREAM_MODE" in
+    virtual|physical) ;;
+    *) die "Invalid STREAM_MODE=$STREAM_MODE (expected virtual or physical)" ;;
+esac
+if [ "$HAVE_PRIOR_INSTALL_STATE" = "1" ]; then
+    PRIOR_STREAM_MODE="${PRIOR_STREAM_MODE:-virtual}"
+    [ "$STREAM_MODE" = "$PRIOR_STREAM_MODE" ] || \
+        die "STREAM_MODE changed from $PRIOR_STREAM_MODE to $STREAM_MODE; uninstall first"
+fi
+if [ "$STREAM_MODE" = physical ]; then
+    DYNAMIC_EDID=0
+    REPLACE_EDID=0
+fi
+
 # Detect everything that could fail before changing the system.
 say "Preflight"
 DISTRO_FAMILY="$(vd_detect_distro_family)"
-BOOT_BACKEND="$(vd_detect_boot_backend "$BOOT_BACKEND_OVERRIDE")" || die "set BOOT_BACKEND explicitly"
-INITRAMFS_BACKEND="$(vd_detect_initramfs_backend "$BOOT_BACKEND" "$INITRAMFS_BACKEND_OVERRIDE")" || \
-    die "set INITRAMFS_BACKEND explicitly"
+BOOT_BACKEND="none"
+INITRAMFS_BACKEND="none"
+if [ "$STREAM_MODE" = virtual ]; then
+    BOOT_BACKEND="$(vd_detect_boot_backend "$BOOT_BACKEND_OVERRIDE")" || die "set BOOT_BACKEND explicitly"
+    INITRAMFS_BACKEND="$(vd_detect_initramfs_backend "$BOOT_BACKEND" "$INITRAMFS_BACKEND_OVERRIDE")" || \
+        die "set INITRAMFS_BACKEND explicitly"
+else
+    BOOT_BACKEND="$(vd_detect_boot_backend "$BOOT_BACKEND_OVERRIDE" || true)"
+    [ -n "$BOOT_BACKEND" ] || BOOT_BACKEND=none
+    if [ "$BOOT_BACKEND" != none ]; then
+        INITRAMFS_BACKEND="$(vd_detect_initramfs_backend "$BOOT_BACKEND" "$INITRAMFS_BACKEND_OVERRIDE" || true)"
+        [ -n "$INITRAMFS_BACKEND" ] || INITRAMFS_BACKEND=none
+    fi
+fi
 
 required=(python3 install sed grep awk systemctl systemd-run runuser kscreen-doctor kde-inhibit jq mktemp flock sha256sum dd cmp wc readlink timeout)
 missing=()
@@ -666,18 +714,21 @@ if [ "${#missing[@]}" -gt 0 ]; then
     fi
     exit 1
 fi
-case "$BOOT_BACKEND" in
-    limine) command -v "$VD_LIMINE_CMD" >/dev/null 2>&1 || die "missing $VD_LIMINE_CMD" ;;
-    grubby) command -v grubby >/dev/null 2>&1 || die "missing grubby" ;;
-    grub) [ -f "$VD_GRUB_DEFAULT" ] || die "missing $VD_GRUB_DEFAULT" ;;
-esac
-case "$INITRAMFS_BACKEND" in
-    limine) command -v "$VD_LIMINE_CMD" >/dev/null 2>&1 || die "missing $VD_LIMINE_CMD" ;;
-    mkinitcpio) { [ -x "$VD_MKINITCPIO_CMD" ] || command -v mkinitcpio >/dev/null 2>&1; } || die "missing mkinitcpio" ;;
-    dracut) command -v "$VD_DRACUT_CMD" >/dev/null 2>&1 || die "missing dracut" ;;
-    update-initramfs) command -v "$VD_UPDATE_INITRAMFS_CMD" >/dev/null 2>&1 || die "missing update-initramfs" ;;
-esac
-printf '  distro=%s bootloader=%s initramfs=%s\n' "$DISTRO_FAMILY" "$BOOT_BACKEND" "$INITRAMFS_BACKEND"
+if [ "$STREAM_MODE" = virtual ]; then
+    case "$BOOT_BACKEND" in
+        limine) command -v "$VD_LIMINE_CMD" >/dev/null 2>&1 || die "missing $VD_LIMINE_CMD" ;;
+        grubby) command -v grubby >/dev/null 2>&1 || die "missing grubby" ;;
+        grub) [ -f "$VD_GRUB_DEFAULT" ] || die "missing $VD_GRUB_DEFAULT" ;;
+    esac
+    case "$INITRAMFS_BACKEND" in
+        limine) command -v "$VD_LIMINE_CMD" >/dev/null 2>&1 || die "missing $VD_LIMINE_CMD" ;;
+        mkinitcpio) { [ -x "$VD_MKINITCPIO_CMD" ] || command -v mkinitcpio >/dev/null 2>&1; } || die "missing mkinitcpio" ;;
+        dracut) command -v "$VD_DRACUT_CMD" >/dev/null 2>&1 || die "missing dracut" ;;
+        update-initramfs) command -v "$VD_UPDATE_INITRAMFS_CMD" >/dev/null 2>&1 || die "missing update-initramfs" ;;
+    esac
+fi
+printf '  distro=%s bootloader=%s initramfs=%s stream=%s\n' \
+    "$DISTRO_FAMILY" "$BOOT_BACKEND" "$INITRAMFS_BACKEND" "$STREAM_MODE"
 
 for user_input in "$CONF" "$HOST_CONF"; do
     if [ -e "$user_input" ] || [ -L "$user_input" ]; then
@@ -693,7 +744,8 @@ done
 say "Detecting DRM connectors"
 SUNSHINE_CARD="$(sunshine_drm_card || true)"
 VIRT_OUTPUT="${VIRT_OUTPUT:-$(read_connector_config VIRT_OUTPUT || true)}"
-[ -n "$VIRT_OUTPUT" ] || VIRT_OUTPUT="$(connector_from_cmdline || true)"
+[ "$STREAM_MODE" = physical ] || [ -n "$VIRT_OUTPUT" ] || \
+    VIRT_OUTPUT="$(connector_from_cmdline || true)"
 PHYS_OUTPUT="${PHYS_OUTPUT:-$(read_connector_config PHYS_OUTPUT || true)}"
 PHYS_MODE="${PHYS_MODE:-}"
 
@@ -710,44 +762,77 @@ DRM_CARD="$(basename "$DRM_CARD")"
 [[ "$DRM_CARD" =~ ^card[0-9]+$ ]] || die "invalid DRM_CARD=$DRM_CARD"
 [ -d "/sys/class/drm/$DRM_CARD" ] || die "$DRM_CARD does not exist"
 
-[ -n "$VIRT_OUTPUT" ] || VIRT_OUTPUT="$(detect_connector "$DRM_CARD" disconnected || true)"
-[ -n "$PHYS_OUTPUT" ] || PHYS_OUTPUT="$(detect_connector "$DRM_CARD" connected "$VIRT_OUTPUT" || true)"
-[ -n "$VIRT_OUTPUT" ] || die "no spare connector found on $DRM_CARD; set VIRT_OUTPUT="
-[ -n "$PHYS_OUTPUT" ] || die "no physical monitor found on $DRM_CARD; set PHYS_OUTPUT="
+if [ "$STREAM_MODE" = physical ]; then
+    [ -n "$PHYS_OUTPUT" ] || PHYS_OUTPUT="$(detect_connector "$DRM_CARD" connected || true)"
+    [ -n "$VIRT_OUTPUT" ] || VIRT_OUTPUT="$(detect_connector "$DRM_CARD" connected "$PHYS_OUTPUT" || true)"
+    [ -n "$PHYS_OUTPUT" ] || die "no desktop monitor found on $DRM_CARD; set PHYS_OUTPUT="
+    [ -n "$VIRT_OUTPUT" ] || \
+        die "no second connected connector found on $DRM_CARD; plug in the stream display and set VIRT_OUTPUT="
+else
+    [ -n "$VIRT_OUTPUT" ] || VIRT_OUTPUT="$(detect_connector "$DRM_CARD" disconnected || true)"
+    [ -n "$PHYS_OUTPUT" ] || PHYS_OUTPUT="$(detect_connector "$DRM_CARD" connected "$VIRT_OUTPUT" || true)"
+    [ -n "$VIRT_OUTPUT" ] || die "no spare connector found on $DRM_CARD; set VIRT_OUTPUT="
+    [ -n "$PHYS_OUTPUT" ] || die "no physical monitor found on $DRM_CARD; set PHYS_OUTPUT="
+fi
 validate_connector "$VIRT_OUTPUT"
 validate_connector "$PHYS_OUTPUT"
-[ "$VIRT_OUTPUT" != "$PHYS_OUTPUT" ] || die "virtual and physical connectors must differ"
+[ "$VIRT_OUTPUT" != "$PHYS_OUTPUT" ] || die "stream and desktop connectors must differ"
 [ -e "/sys/class/drm/$DRM_CARD-$VIRT_OUTPUT/status" ] || die "$VIRT_OUTPUT is not on $DRM_CARD"
 [ -e "/sys/class/drm/$DRM_CARD-$PHYS_OUTPUT/status" ] || die "$PHYS_OUTPUT is not on $DRM_CARD"
 
 VIRT_STATUS="$(<"/sys/class/drm/$DRM_CARD-$VIRT_OUTPUT/status")"
-if [ "$VIRT_STATUS" != disconnected ]; then
-    TRUSTED_FORCED_VIRTUAL=0
-    if [ "$VIRT_STATUS" = connected ] && [ "$HAVE_PRIOR_INSTALL_STATE" = "1" ] && \
-       [ "$PRIOR_EDID_MANAGED" = "1" ] && \
-       [ "$PRIOR_VIRT_OUTPUT" = "$VIRT_OUTPUT" ] && \
-       [ "$PRIOR_EDID_NAME" = "$EDID_NAME" ] && \
-       [ "$PRIOR_EDID_DST" = "$EDID_DST" ] && \
-       cmdline_has_edid_mapping "$VIRT_OUTPUT" "$EDID_NAME" && \
-       cmdline_has_force_enable "$VIRT_OUTPUT"; then
-        TRUSTED_FORCED_VIRTUAL=1
+PHYS_STATUS="$(<"/sys/class/drm/$DRM_CARD-$PHYS_OUTPUT/status")"
+if [ "$STREAM_MODE" = physical ]; then
+    [ "$PHYS_STATUS" = connected ] || \
+        die "$PHYS_OUTPUT is currently $PHYS_STATUS; STREAM_MODE=physical requires a plugged-in desktop display"
+    [ "$VIRT_STATUS" = connected ] || \
+        die "$VIRT_OUTPUT is currently $VIRT_STATUS; STREAM_MODE=physical requires a plugged-in stream display"
+else
+    if [ "$VIRT_STATUS" != disconnected ]; then
+        TRUSTED_FORCED_VIRTUAL=0
+        if [ "$VIRT_STATUS" = connected ] && [ "$HAVE_PRIOR_INSTALL_STATE" = "1" ] && \
+           [ "$PRIOR_EDID_MANAGED" = "1" ] && \
+           [ "$PRIOR_VIRT_OUTPUT" = "$VIRT_OUTPUT" ] && \
+           [ "$PRIOR_EDID_NAME" = "$EDID_NAME" ] && \
+           [ "$PRIOR_EDID_DST" = "$EDID_DST" ] && \
+           cmdline_has_edid_mapping "$VIRT_OUTPUT" "$EDID_NAME" && \
+           cmdline_has_force_enable "$VIRT_OUTPUT"; then
+            TRUSTED_FORCED_VIRTUAL=1
+        fi
+        if [ "$TRUSTED_FORCED_VIRTUAL" != "1" ]; then
+            die "$VIRT_OUTPUT is currently $VIRT_STATUS; a new virtual target must be disconnected. Capture any source EDID first, unplug the target cable, and retry. For a trusted existing installation whose forced connector is active, run --check with sudo so install state can be verified."
+        fi
+        echo "WARN: accepting connected $VIRT_OUTPUT because trusted install state and the running firmware override match; ensure no physical sink is attached" >&2
     fi
-    if [ "$TRUSTED_FORCED_VIRTUAL" != "1" ]; then
-        die "$VIRT_OUTPUT is currently $VIRT_STATUS; a new virtual target must be disconnected. Capture any source EDID first, unplug the target cable, and retry. For a trusted existing installation whose forced connector is active, run --check with sudo so install state can be verified."
-    fi
-    echo "WARN: accepting connected $VIRT_OUTPUT because trusted install state and the running firmware override match; ensure no physical sink is attached" >&2
 fi
 
 DRIVER_PATH="$(readlink -f "/sys/class/drm/$DRM_CARD/device/driver" 2>/dev/null || true)"
 DRIVER="${DRIVER_PATH##*/}"
 printf '  GPU card  -> %s (driver=%s)\n' "$DRM_CARD" "${DRIVER:-unknown}"
-if [ "$VIRT_STATUS" = disconnected ]; then
-    printf '  virtual   -> %s (disconnected)\n' "$VIRT_OUTPUT"
-else
-    printf '  virtual   -> %s (trusted forced connection)\n' "$VIRT_OUTPUT"
-fi
-printf '  physical  -> %s (mode=%s)\n' "$PHYS_OUTPUT" "${PHYS_MODE:-preferred}"
+printf '  stream    -> %s (%s, STREAM_MODE=%s)\n' "$VIRT_OUTPUT" "$VIRT_STATUS" "$STREAM_MODE"
+printf '  desktop   -> %s (mode=%s)\n' "$PHYS_OUTPUT" "${PHYS_MODE:-preferred}"
 
+# Resolve and validate the EDID source only after both connectors have been
+# proven to belong to the selected DRM card. Physical stream-port mode uses the
+# real sink's EDID and skips firmware/boot mutations entirely.
+if [ "$STREAM_MODE" = physical ]; then
+    EDID_TARGET_INTERFACE="$(connector_edid_interface "$VIRT_OUTPUT")"
+    EDID_SOURCE_INTERFACE=""
+    EDID_SOURCE_REF=""
+    EDID_SOURCE_HASH=""
+    EDID_SOURCE_SNAPSHOT=""
+    if [ "$CHECK_ONLY" = "1" ]; then
+        cat <<EOF
+
+Preflight passed; no changes were made.
+STREAM_MODE=physical: $VIRT_OUTPUT stays plugged in and compositor-disabled while idle.
+Desktop: $PHYS_OUTPUT
+No firmware EDID, kernel arguments, or initramfs drop-in will be installed.
+Run sudo env STREAM_MODE=physical ./install.sh to install with this selection.
+EOF
+        exit 0
+    fi
+else
 # Resolve and validate the EDID source only after both connectors have been
 # proven to belong to the selected DRM card. All work here is confined to
 # temporary files, so a bad source or transport mismatch fails before any
@@ -968,6 +1053,7 @@ Run sudo ./install.sh to install with this selection.
 EOF
     exit 0
 fi
+fi
 
 for user_path in "$INSTALL_DIR" "$STATE_DIR" "$CONF" "$USER_UNIT_DIR" "$HOST_CONF"; do
     case "$user_path" in
@@ -994,13 +1080,15 @@ if [ "$HAVE_PRIOR_INSTALL_STATE" = "1" ]; then
 
     # Files about to be replaced must be listed even if an older state omitted
     # them from its manifest. This keeps a reinstall from claiming collisions.
-    verify_prior_root_asset "$ROOT_LIBEXEC/generate_edid.py"
-    verify_prior_root_asset "$ROOT_LIBEXEC/vdisplay-platform.sh"
-    if [ "$DYNAMIC_EDID" = "1" ]; then
-        verify_prior_root_asset "$REGEN_CONF"
-        verify_prior_root_asset /etc/systemd/system/vdisplay-edid-regen.path
-        verify_prior_root_asset /etc/systemd/system/vdisplay-edid-regen.service
-        verify_prior_root_asset /usr/local/sbin/vdisplay-edid-regen.sh
+    if [ "$STREAM_MODE" = virtual ]; then
+        verify_prior_root_asset "$ROOT_LIBEXEC/generate_edid.py"
+        verify_prior_root_asset "$ROOT_LIBEXEC/vdisplay-platform.sh"
+        if [ "$DYNAMIC_EDID" = "1" ]; then
+            verify_prior_root_asset "$REGEN_CONF"
+            verify_prior_root_asset /etc/systemd/system/vdisplay-edid-regen.path
+            verify_prior_root_asset /etc/systemd/system/vdisplay-edid-regen.service
+            verify_prior_root_asset /usr/local/sbin/vdisplay-edid-regen.sh
+        fi
     fi
 fi
 
@@ -1021,10 +1109,12 @@ fi
 if [ "$HAVE_PRIOR_INSTALL_STATE" != "1" ]; then
     [ ! -e "$INSTALL_STATE" ] && [ ! -L "$INSTALL_STATE" ] || \
         die "$INSTALL_STATE exists without trusted install metadata"
-    for owned_path in "$ROOT_LIBEXEC/generate_edid.py" "$ROOT_LIBEXEC/vdisplay-platform.sh"; do
-        [ ! -e "$owned_path" ] && [ ! -L "$owned_path" ] || \
-            die "$owned_path already exists without trusted install metadata"
-    done
+    if [ "$STREAM_MODE" = virtual ]; then
+        for owned_path in "$ROOT_LIBEXEC/generate_edid.py" "$ROOT_LIBEXEC/vdisplay-platform.sh"; do
+            [ ! -e "$owned_path" ] && [ ! -L "$owned_path" ] || \
+                die "$owned_path already exists without trusted install metadata"
+        done
+    fi
 fi
 
 say "Installing user scripts"
@@ -1053,16 +1143,18 @@ for file in "${SCRIPT_FILES[@]}"; do
     file_hash="$(as_user sha256sum "$INSTALL_DIR/$file" | awk '{ print $1 }')"
     INSTALLED_SCRIPT_HASHES+="${INSTALLED_SCRIPT_HASHES:+$'\n'}$file $file_hash"
 done
-ensure_root_dir /usr/local/libexec 0755
-ensure_root_dir "$ROOT_LIBEXEC" 0755
-write_root_file "$ROOT_LIBEXEC/generate_edid.py" 0755 < "$REPO/scripts/generate_edid.py"
-write_root_file "$ROOT_LIBEXEC/vdisplay-platform.sh" 0755 < "$REPO/scripts/vdisplay-platform.sh"
 INSTALLED_ROOT_ASSET_HASHES="$PRIOR_INSTALLED_ROOT_ASSET_HASHES"
-record_root_asset "$ROOT_LIBEXEC/generate_edid.py"
-record_root_asset "$ROOT_LIBEXEC/vdisplay-platform.sh"
 INSTALLED_USER_UNIT_HASH="$PRIOR_INSTALLED_USER_UNIT_HASH"
-
-PLATFORM_HELPER="$ROOT_LIBEXEC/vdisplay-platform.sh"
+PLATFORM_HELPER=""
+if [ "$STREAM_MODE" = virtual ]; then
+    ensure_root_dir /usr/local/libexec 0755
+    ensure_root_dir "$ROOT_LIBEXEC" 0755
+    write_root_file "$ROOT_LIBEXEC/generate_edid.py" 0755 < "$REPO/scripts/generate_edid.py"
+    write_root_file "$ROOT_LIBEXEC/vdisplay-platform.sh" 0755 < "$REPO/scripts/vdisplay-platform.sh"
+    record_root_asset "$ROOT_LIBEXEC/generate_edid.py"
+    record_root_asset "$ROOT_LIBEXEC/vdisplay-platform.sh"
+    PLATFORM_HELPER="$ROOT_LIBEXEC/vdisplay-platform.sh"
+fi
 PENDING_FILE=""
 PENDING_LOCK=""
 SUNSHINE_PATCHED="$PRIOR_SUNSHINE_PATCHED"
@@ -1094,7 +1186,7 @@ persist_install_state() {
         CONF USER_UNIT_DIR HOST_CONF REGEN_DIR EDID_NAME EDID_DST EDID_MANAGED EDID_BACKUP \
         EDID_SOURCE EDID_SOURCE_REF EDID_SOURCE_HASH EDID_IDENTITY \
         EDID_SOURCE_INTERFACE EDID_TARGET_INTERFACE EDID_SOURCE_SNAPSHOT \
-        ALLOW_EDID_TRANSPORT_MISMATCH \
+        ALLOW_EDID_TRANSPORT_MISMATCH STREAM_MODE \
         VIRT_OUTPUT PHYS_OUTPUT DRM_CARD BOOT_BACKEND INITRAMFS_BACKEND KARGS_MANAGED \
         KARGS_ADDED KARGS_PENDING KARGS_PENDING_ARGS INITRAMFS_CONFIG_MANAGED \
         INITRAMFS_CONFIG_PENDING PLATFORM_HELPER DYNAMIC_EDID PENDING_FILE \
@@ -1103,7 +1195,9 @@ persist_install_state() {
         SUN_PREP_INSTALLED_VALUE INSTALLED_SCRIPT_HASHES INSTALLED_ROOT_ASSET_HASHES \
         INSTALLED_USER_UNIT_HASH
 }
-if [ -f "$EDID_DST" ] && [ "$REPLACE_EDID" != "1" ]; then
+BOOT_CHANGED=0
+if [ "$STREAM_MODE" = virtual ]; then
+    if [ -f "$EDID_DST" ] && [ "$REPLACE_EDID" != "1" ]; then
     if [ "$PRIOR_EDID_MANAGED" = "1" ]; then
         say "Reusing installer-owned EDID"
         EDID_MANAGED=1
@@ -1227,6 +1321,11 @@ if [ "$BOOT_CHANGED" = "1" ]; then
 else
     echo "  existing kernel arguments, EDID, and initramfs configuration retained"
 fi
+else
+    say "Skipping firmware EDID and boot arguments"
+    echo "  STREAM_MODE=physical uses the real sink on $VIRT_OUTPUT"
+    persist_install_state
+fi
 
 # Root-owned queue directory: the user may write the regular pending file but
 # cannot replace it with a symlink consumed by the root service.
@@ -1279,7 +1378,7 @@ BACKEND=kscreen
 SINGLE_DISPLAY=1
 INHIBIT=1
 {
-    for config_var in VIRT_OUTPUT PHYS_OUTPUT PHYS_MODE BACKEND SINGLE_DISPLAY \
+    for config_var in STREAM_MODE VIRT_OUTPUT PHYS_OUTPUT PHYS_MODE BACKEND SINGLE_DISPLAY \
         INHIBIT STATE_DIR DYNAMIC_EDID PENDING_FILE PENDING_LOCK; do
         printf '%s=%q\n' "$config_var" "${!config_var}"
     done
@@ -1402,7 +1501,7 @@ cat <<EOF
 
 === DONE ===
 Platform: $DISTRO_FAMILY / $BOOT_BACKEND / $INITRAMFS_BACKEND
-Display:  $PHYS_OUTPUT -> $VIRT_OUTPUT while streaming
-EDID:     $([ "$EDID_MANAGED" = 1 ] && echo "installed from $EDID_SOURCE ($EDID_IDENTITY)" || echo preserved)
+Stream:   STREAM_MODE=$STREAM_MODE  $PHYS_OUTPUT (idle) -> $VIRT_OUTPUT (streaming)
+EDID:     $([ "$STREAM_MODE" = physical ] && echo "using the real sink on $VIRT_OUTPUT" || { [ "$EDID_MANAGED" = 1 ] && echo "installed from $EDID_SOURCE ($EDID_IDENTITY)" || echo preserved; })
 $( [ "$BOOT_CHANGED" = 1 ] && echo "Reboot required for boot/initramfs changes." || echo "No boot configuration changes were needed." )
 EOF

@@ -77,6 +77,7 @@ else
     INITRAMFS_CONFIG_MANAGED=0
     INITRAMFS_CONFIG_PENDING=0
     PLATFORM_HELPER=""
+    STREAM_MODE=virtual
     DYNAMIC_EDID=0
     SUNSHINE_PATCHED=0
     SUN_CAPTURE_OLD_LINES=""
@@ -102,6 +103,7 @@ fi
 : "${EDID_SOURCE:=}" "${EDID_SOURCE_HASH:=}" "${EDID_IDENTITY:=}"
 : "${EDID_SOURCE_INTERFACE:=}" "${EDID_TARGET_INTERFACE:=}"
 : "${EDID_SOURCE_SNAPSHOT:=}"
+: "${STREAM_MODE:=virtual}"
 [ -n "$USER_HOME" ] && [ "$USER_HOME" != "/" ] || { echo "Invalid user home" >&2; exit 1; }
 [[ "$EDID_NAME" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] &&
     [ "$EDID_DST" = "/usr/lib/firmware/edid/$EDID_NAME" ] || {
@@ -206,7 +208,7 @@ case "$KARGS_PENDING:$INITRAMFS_CONFIG_PENDING" in
     *) echo "Invalid pending-operation metadata in $INSTALL_STATE" >&2; exit 1 ;;
 esac
 
-if [ "$HAVE_INSTALL_STATE" = "1" ]; then
+if [ "$HAVE_INSTALL_STATE" = "1" ] && [ -n "${PLATFORM_HELPER:-}" ]; then
     expected_platform_hash="$(manifest_hash_for "$PLATFORM_HELPER" "$INSTALLED_ROOT_ASSET_HASHES" || true)"
     [ "$PLATFORM_HELPER" = /usr/local/libexec/vdisplay/vdisplay-platform.sh ] &&
         [ -n "$expected_platform_hash" ] && safe_root_file "$PLATFORM_HELPER" &&

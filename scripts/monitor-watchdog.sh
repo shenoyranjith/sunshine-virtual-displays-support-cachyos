@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
-# Reaffirm the physical monitor as primary (and keep the virtual streaming output
-# disabled) whenever NO stream is active. While a stream is active it
-# does nothing; the global_prep_cmd owns the display layout then.
+# Reaffirm the desktop monitor as primary (and keep the stream output disabled)
+# whenever NO stream is active. That stream output may be a firmware virtual
+# connector or a real sink that stays plugged in (STREAM_MODE=physical). While a
+# stream is active the watchdog does nothing; the global_prep_cmd owns the layout.
 #
 # Why this exists: a physical monitor often keeps HPD asserted in standby, so
 # /sys/.../status always reads "connected" and can't be used as the signal. And
 # the compositor (kscreen) may restore the last (streaming) layout across boots,
-# leaving the physical monitor disabled. This watchdog corrects that at idle.
+# leaving the desktop monitor disabled. This watchdog corrects that at idle.
 #
 # Reads the same config as the prep scripts (~/.config/vdisplay.conf).
 set -u
@@ -54,7 +55,7 @@ layout_is_idle() { # 0 idle, 1 layout needs restore, 2 query failure
 }
 
 monitor_watchdog_main() {
-    log "watchdog: keep $PHYS_OUTPUT primary when no stream (virtual=$VIRT_OUTPUT, ${INTERVAL}s)"
+    log "watchdog: keep $PHYS_OUTPUT primary when no stream (stream=$VIRT_OUTPUT, ${INTERVAL}s)"
     exec 7>> "$VD_LIFECYCLE_LOCK"
 
     while true; do

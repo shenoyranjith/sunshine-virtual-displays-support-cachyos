@@ -11,6 +11,7 @@
 : "${SINGLE_DISPLAY:=1}"
 : "${INHIBIT:=1}"
 : "${STATE_DIR:=$HOME/.local/share/vdisplay}"
+: "${STREAM_MODE:=virtual}"
 : "${DYNAMIC_EDID:=0}"
 : "${PENDING_FILE:=$STATE_DIR/pending-modes.txt}"
 : "${PENDING_LOCK:=$STATE_DIR/pending-modes.lock}"

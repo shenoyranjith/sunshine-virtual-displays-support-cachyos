@@ -132,6 +132,8 @@ assert_file_has "$ROOT/home/tester/.config/sunshine/sunshine.conf" 'capture = km
 assert_file_has "$ROOT/home/tester/.config/sunshine/sunshine.conf" 'output_name = 0'
 assert_file_has "$ROOT/home/tester/.config/sunshine/sunshine.conf" 'keep_me = yes'
 [ "$(stat -c %a "$ROOT/home/tester/.config")" = 700 ] || fail "installer changed ~/.config mode"
+assert_file_has "$ROOT/etc/vdisplay-install.conf" 'STREAM_MODE=virtual'
+assert_file_has "$ROOT/home/tester/.config/vdisplay.conf" 'STREAM_MODE=virtual'
 
 # Model a successful regeneration that learned a new mode. A repeat install
 # must derive from the immutable source plus the trusted learned-mode set,
@@ -145,8 +147,12 @@ cp "$ROOT/derived-with-extra.bin" \
     "$ROOT/usr/lib/firmware/edid/virtual-display.bin"
 
 # A repeat install must retain ownership and learned modes without another
-# boot rebuild.
+# boot rebuild. Switching STREAM_MODE on a live install is refused until
+# uninstall, even when the stream connector is plugged in.
 printf 'connected\n' > "$ROOT/sys/class/drm/card1-HDMI-A-1/status"
+if run_sandbox env STREAM_MODE=physical /opt/repo/install.sh >/dev/null 2>&1; then
+    fail "installer switched STREAM_MODE without uninstall"
+fi
 if run_sandbox /opt/repo/install.sh >/dev/null 2>&1; then
     fail "connected reinstall succeeded without an active forced mapping"
 fi
@@ -378,5 +384,42 @@ run_sandbox /opt/repo/uninstall.sh >/dev/null
 assert_absent "$ROOT/etc/vdisplay-install.conf"
 assert_absent "$backup"
 assert_file_has "$ROOT/usr/lib/firmware/edid/virtual-display.bin" 'administrator EDID'
+
+# STREAM_MODE=physical uses a second plugged-in sink. It must not write firmware
+# EDID or kernel arguments, and a disconnected stream target is refused.
+printf 'connected\n' > "$ROOT/sys/class/drm/card1-DP-3/status"
+printf 'disconnected\n' > "$ROOT/sys/class/drm/card1-HDMI-A-1/status"
+if run_sandbox env STREAM_MODE=physical /opt/repo/install.sh >/dev/null 2>&1; then
+    fail "physical installer accepted a disconnected stream target"
+fi
+assert_absent "$ROOT/etc/vdisplay-install.conf"
+printf 'connected\n' > "$ROOT/sys/class/drm/card1-HDMI-A-1/status"
+run_sandbox env STREAM_MODE=physical /opt/repo/install.sh --check >/dev/null
+run_sandbox env STREAM_MODE=physical /opt/repo/install.sh >/dev/null
+assert_file_has "$ROOT/etc/vdisplay-install.conf" 'STREAM_MODE=physical'
+assert_file_has "$ROOT/home/tester/.config/vdisplay.conf" 'STREAM_MODE=physical'
+assert_file_has "$ROOT/home/tester/.config/vdisplay.conf" 'DYNAMIC_EDID=0'
+assert_file_has "$ROOT/usr/lib/firmware/edid/virtual-display.bin" 'administrator EDID'
+assert_absent "$ROOT/etc/mkinitcpio.conf.d/90-vdisplay.conf"
+assert_absent "$ROOT/usr/local/libexec/vdisplay/generate_edid.py"
+assert_absent "$ROOT/usr/local/libexec/vdisplay/vdisplay-platform.sh"
+if grep -Fq 'drm.edid_firmware=' "$ROOT/etc/default/limine"; then
+    fail "physical install mutated Limine kernel arguments"
+fi
+assert_file_has "$ROOT/home/tester/.config/sunshine/sunshine.conf" 'capture = kms'
+assert_file_has "$ROOT/home/tester/.config/sunshine/sunshine.conf" 'output_name = 0'
+assert_file_has "$ROOT/home/tester/.config/sunshine/sunshine.conf" 'keep_me = yes'
+if run_sandbox env STREAM_MODE=virtual /opt/repo/install.sh >/dev/null 2>&1; then
+    fail "installer switched STREAM_MODE from physical to virtual without uninstall"
+fi
+run_sandbox /opt/repo/uninstall.sh >/dev/null
+assert_absent "$ROOT/etc/vdisplay-install.conf"
+assert_file_has "$ROOT/usr/lib/firmware/edid/virtual-display.bin" 'administrator EDID'
+if grep -Fq 'drm.edid_firmware=' "$ROOT/etc/default/limine"; then
+    fail "physical uninstall mutated Limine kernel arguments"
+fi
+if grep -Fq 'output_name = 0' "$ROOT/home/tester/.config/sunshine/sunshine.conf"; then
+    fail "physical uninstall left installer-owned output_name"
+fi
 
 echo "install smoke test passed"
