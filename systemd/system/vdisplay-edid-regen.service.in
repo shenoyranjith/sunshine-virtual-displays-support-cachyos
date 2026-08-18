@@ -1,7 +1,15 @@
 [Unit]
 Description=Regenerate virtual-display EDID from queued modes
+StartLimitIntervalSec=10min
+StartLimitBurst=5
 
 [Service]
 Type=oneshot
+UMask=0077
 # @REGEN@ is replaced by install.sh with the installed edid-regen.sh path
 ExecStart=@REGEN@
+Restart=on-failure
+RestartSec=30s
+
+[Install]
+WantedBy=multi-user.target

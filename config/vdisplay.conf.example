@@ -20,5 +20,12 @@ SINGLE_DISPLAY=1
 # Hold an idle/DPMS inhibitor for the stream's duration (KDE: kde-inhibit).
 INHIBIT=1
 
-# State dir for logs / pending-mode queue / streaming flag.
+# User-owned state directory for request logs.
 STATE_DIR="$HOME/.local/share/vdisplay"
+
+# Missing-mode EDID regeneration. The installer enables this only when it owns
+# the EDID and always rebuilds from its immutable source snapshot. By default
+# the old virtual EDID is backed up and replaced with the selected source.
+DYNAMIC_EDID=0
+PENDING_FILE="/var/lib/vdisplay/pending-modes.txt"
+PENDING_LOCK="/var/lib/vdisplay/pending-modes.lock"

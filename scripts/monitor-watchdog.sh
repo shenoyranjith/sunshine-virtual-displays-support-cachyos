@@ -10,12 +10,7 @@
 #
 # Reads the same config as the prep scripts (~/.config/vdisplay.conf).
 set -u
-
-: "${VDISPLAY_CONF:=$HOME/.config/vdisplay.conf}"
-[ -f "$VDISPLAY_CONF" ] && . "$VDISPLAY_CONF"
-: "${PHYS_OUTPUT:?set PHYS_OUTPUT in $VDISPLAY_CONF}"
-: "${VIRT_OUTPUT:?set VIRT_OUTPUT in $VDISPLAY_CONF}"
-: "${PHYS_MODE:=}"
+. "$(dirname "${BASH_SOURCE[0]}")/vdisplay-common.sh"
 INTERVAL="${WATCHDOG_INTERVAL:-5}"
 
 _uid="$(id -u)"
@@ -24,37 +19,65 @@ export WAYLAND_DISPLAY="${WAYLAND_DISPLAY:-wayland-0}"
 export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=$XDG_RUNTIME_DIR/bus}"
 export DISPLAY="${DISPLAY:-:0}"
 
-# Same flag the prep scripts use; in tmpfs so it can't survive a reboot.
-FLAG="$XDG_RUNTIME_DIR/vdisplay.flag"
-UDP_LO=47998; UDP_HI=48010   # host video/control/audio ports (fallback signal)
-
 log() { echo "$(date '+%F %T') $*"; }
 
 stream_active() {                       # 0 = streaming, 1 = idle
-    [ -f "$FLAG" ] && return 0          # primary signal (no false negatives)
-    ss -uan 2>/dev/null | awk -v lo="$UDP_LO" -v hi="$UDP_HI" '
-        NR>1 { n=split($4,a,":"); p=a[n]+0; if (p>=lo && p<=hi) f=1 }
-        END { exit !f }'                # fallback: UDP ports
+    local sunshine_pid
+    [ -f "$VD_FLAG" ] || return 1
+    sunshine_pid="$(vd_flag_value sunshine_pid 2>/dev/null || true)"
+    [ -n "$sunshine_pid" ] || return 0
+    vd_sunshine_pid_alive "$sunshine_pid" && return 0
+    log "discarding stale stream lease (Sunshine pid $sunshine_pid is gone)"
+    rm -f "$VD_FLAG"
+    vd_inhibit_stop || true
+    return 1
 }
 
-phys_is_primary() {                     # 0 = physical enabled & priority 1
-    kscreen-doctor -j 2>/dev/null \
-        | jq -e --arg n "$PHYS_OUTPUT" \
-            '.outputs[] | select(.name==$n) | select(.enabled==true and .priority==1)' \
-        >/dev/null 2>&1
+layout_is_idle() { # 0 idle, 1 layout needs restore, 2 query failure
+    local single=false json status
+    [ "$SINGLE_DISPLAY" = "1" ] && single=true
+    json="$(kscreen-doctor -j 2>/dev/null)" || return 2
+    jq -e --arg physical "$PHYS_OUTPUT" --arg virtual "$VIRT_OUTPUT" \
+        --argjson single "$single" \
+        'if (.outputs | type) != "array" then error("missing outputs") else
+           (any(.outputs[]; .name == $physical and .enabled == true and .priority == 1)) and
+           (if $single then
+                (any(.outputs[]; .name == $virtual and .enabled == true) | not)
+            else
+                ((any(.outputs[]; .name == $virtual) | not) or
+                 any(.outputs[]; .name == $virtual and .enabled == true and .priority == 2))
+            end)
+         end' >/dev/null 2>&1 <<< "$json"
+    status=$?
+    [ "$status" -le 1 ] || return 2
+    return "$status"
 }
 
-log "watchdog: keep $PHYS_OUTPUT primary when no stream (virtual=$VIRT_OUTPUT, ${INTERVAL}s)"
+monitor_watchdog_main() {
+    log "watchdog: keep $PHYS_OUTPUT primary when no stream (virtual=$VIRT_OUTPUT, ${INTERVAL}s)"
+    exec 7>> "$VD_LIFECYCLE_LOCK"
 
-while true; do
-    if stream_active; then
-        :   # stream active: leave the layout to the prep_cmd
-    elif ! phys_is_primary; then
-        log "no stream & $PHYS_OUTPUT not primary -> restoring (disabling $VIRT_OUTPUT)"
-        a=(output."$PHYS_OUTPUT".enable)
-        [ -n "$PHYS_MODE" ] && a+=(output."$PHYS_OUTPUT".mode."$PHYS_MODE")
-        a+=(output."$PHYS_OUTPUT".priority.1 output."$VIRT_OUTPUT".disable)
-        kscreen-doctor "${a[@]}"
-    fi
-    sleep "$INTERVAL"
-done
+    while true; do
+        if flock -n 7; then
+            if stream_active; then
+                :   # stream active: leave the layout to the prep_cmd
+            elif layout_is_idle; then
+                :
+            else
+                status=$?
+                if [ "$status" = "1" ]; then
+                    log "no stream & $PHYS_OUTPUT not primary -> restoring"
+                    vd_restore_phys || log "restore failed; will retry"
+                else
+                    log "KScreen layout query failed; leaving outputs unchanged"
+                fi
+            fi
+            flock -u 7
+        fi
+        sleep "$INTERVAL"
+    done
+}
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    monitor_watchdog_main "$@"
+fi

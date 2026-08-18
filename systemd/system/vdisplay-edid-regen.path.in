@@ -2,8 +2,8 @@
 Description=Watch for client-requested EDID modes
 
 [Path]
-# @STATE_DIR@ is replaced by install.sh with the target user's state dir
-PathModified=@STATE_DIR@/pending-modes.txt
+# @PENDING_FILE@ is replaced with a regular file in a root-owned directory.
+PathModified=@PENDING_FILE@
 Unit=vdisplay-edid-regen.service
 
 [Install]
